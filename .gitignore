@@ -1,0 +1,20 @@
+# WorkBuddy AI — regenerable or private
+# Skills are reinstalled from skills-lock.json; memory is machine-local.
+.workbuddy-ai/skills/
+.workbuddy-ai/memory/
+
+# Node
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
