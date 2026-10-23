@@ -16,7 +16,15 @@ import { createBridge } from './bridge.js'
 export const name = 'qqbot-chat'
 
 /** Services the bridge needs before it can create a Session. */
-export const inject = ['agents', 'sessions', 'agentDefaultModel', 'workspaceRegistry', 'sessionTitle', 'credentials']
+export const inject = [
+  'agents',
+  'sessions',
+  'agentDefaultModel',
+  'agentPresets',
+  'workspaceRegistry',
+  'sessionTitle',
+  'credentials',
+]
 
 export { Config }
 

@@ -13,11 +13,20 @@ import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { composeTurnText } from './reply.js'
+import { createSessionIndex } from './sessions.js'
+
+/** Where dsh keeps its home; the session index lives beside the sessions themselves. */
+function dshHome() {
+  const configured = process.env.DSH_HOME
+  if (typeof configured === 'string' && configured !== '') return configured
+  return join(homedir(), '.dsh')
+}
 
 /** Expand a leading `~` without touching the fs service. */
 function expandHome(path) {
@@ -85,6 +94,10 @@ function createSemaphore(limit) {
 /** Create the bridge between gateway events and dsh sessions. */
 export function createBridge({ ctx, config, replier, logger, trace = () => {} }) {
   const conversations = new Map()
+  /** @type {Map<string, Promise<object>>} */
+  const creating = new Map()
+  const sessionIndex = createSessionIndex({ file: join(dshHome(), 'qqbot-chat', 'sessions.json'), logger })
+  if (sessionIndex.size() > 0) logger.info(`session index loaded: ${sessionIndex.size()} conversation(s) remembered`)
   const semaphore = createSemaphore(config.maxConcurrent)
   const workspacePath = expandHome(config.workspacePath)
   let workspace
@@ -113,52 +126,138 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
     return list.includes(id)
   }
 
-  /** Create the Session for one conversation and pin its permission tier. */
-  async function createConversation(key, scene, targetId) {
-    trace(`creating session for ${key}`)
-    const ws = await ensureWorkspace()
-    trace(`workspace ${ws.path}`)
-    const sessionId = brandString(`qqbot-${randomUUID()}`)
-    const selection = ctx.agentDefaultModel.currentSelection()
-    trace(`model selection ${selection.provider}/${selection.model}`)
-    const { agent } = await ctx.agents.create({
-      sessionId,
-      meta: { cwd: ws.path },
-      agentOptions: { provider: selection.provider, model: selection.model },
-    })
-    trace(`agent created ${sessionId}`)
+  /** Pin the tier and title that a Session does not carry across a restart. */
+  function applySessionPolicy(agent, targetId) {
     setSandboxMode(agent.session, 'workspace-write')
     setApprovalPolicy(agent.session, 'never')
-    trace('sandbox + approval written')
+    ctx.sessionTitle.rename(agent.session, `QQ-${targetId.slice(-6)}`)
+  }
+
+  /**
+   * Compose the per-Agent scope the way the Web UI does.
+   *
+   * Without mounting an agent preset the Session gets **no tools at all**: the
+   * model then writes tool calls as plain text (the DSML template it was
+   * trained on) and the turn ends with markup as the answer.
+   */
+  async function composeAgent(selection) {
+    const preset = await ctx.agentPresets.resolve(undefined)
+    return {
+      agentPreset: preset.id,
+      setup: async (agentCtx) => {
+        installModelSelection(agentCtx, { current: selection, assembled: undefined })
+        await ctx.agentPresets.mount(agentCtx, preset.id)
+      },
+    }
+  }
+
+  /** Re-attach a Session to the workspace sidebar; failure is cosmetic only. */
+  async function attachQuietly(ws, sessionId) {
     try {
       await ws.attachSession(sessionId)
     } catch (error) {
       logger.warn(`could not attach ${sessionId} to the workspace sidebar: ${error.message}`)
     }
-    ctx.sessionTitle.rename(agent.session, `QQ-${targetId.slice(-6)}`)
+  }
+
+  /**
+   * Create or resume the Session for one conversation.
+   *
+   * A remembered Session is only adopted when it was recorded under the same
+   * workspace — a changed `workspacePath` means the old cwd is wrong. Any
+   * resume failure falls back to a fresh Session without telling the user.
+   */
+  async function createConversation(key, scene, targetId) {
+    const ws = await ensureWorkspace()
+    const selection = ctx.agentDefaultModel.currentSelection()
+    const agentOptions = { provider: selection.provider, model: selection.model }
+    const composition = await composeAgent(selection)
+    const remembered = sessionIndex.get(key)
+
+    if (remembered !== undefined) {
+      if (remembered.workspacePath !== ws.path) {
+        logger.warn(
+          `session ${remembered.sessionId} was recorded under ${remembered.workspacePath}, not ${ws.path}; starting a new one for ${key}`,
+        )
+        sessionIndex.delete(key)
+      } else if (remembered.agentPreset !== composition.agentPreset) {
+        logger.warn(
+          `session ${remembered.sessionId} was composed with preset ${remembered.agentPreset ?? '(none)'}, now ${composition.agentPreset}; starting a new one for ${key}`,
+        )
+        sessionIndex.delete(key)
+      } else {
+        try {
+          const { agent } = await ctx.agents.resume({
+            resumeSessionId: brandString(remembered.sessionId),
+            agentOptions,
+            setup: composition.setup,
+          })
+          trace(`resumed session ${remembered.sessionId} for ${key}`)
+          applySessionPolicy(agent, targetId)
+          await attachQuietly(ws, remembered.sessionId)
+          const entry = { key, scene, targetId, sessionId: remembered.sessionId, agent, chain: Promise.resolve() }
+          conversations.set(key, entry)
+          logger.info(`session ${remembered.sessionId} resumed for ${key}`)
+          return entry
+        } catch (error) {
+          trace(`resume failed for ${key}: ${error.message}`)
+          logger.warn(`could not resume ${remembered.sessionId} for ${key}: ${error.message}; starting a new session`)
+          sessionIndex.delete(key)
+        }
+      }
+    }
+
+    const sessionId = brandString(`qqbot-${randomUUID()}`)
+    trace(`creating session for ${key}`)
+    const { agent } = await ctx.agents.create({
+      sessionId,
+      meta: { cwd: ws.path, agentPreset: composition.agentPreset },
+      agentOptions,
+      setup: composition.setup,
+    })
+    trace(`agent created ${sessionId}`)
+    applySessionPolicy(agent, targetId)
+    await attachQuietly(ws, sessionId)
+    sessionIndex.set(key, { sessionId, workspacePath: ws.path, agentPreset: composition.agentPreset })
     const entry = { key, scene, targetId, sessionId, agent, chain: Promise.resolve() }
     conversations.set(key, entry)
     logger.info(`session ${sessionId} created for ${key}`)
     return entry
   }
 
-  async function getConversation(key, scene, targetId) {
+  /** Resolve the conversation, creating it at most once even under a burst. */
+  function getConversation(key, scene, targetId) {
     const existing = conversations.get(key)
-    if (existing !== undefined) return existing
-    return createConversation(key, scene, targetId)
+    if (existing !== undefined) return Promise.resolve(existing)
+    const pending = creating.get(key)
+    if (pending !== undefined) return pending
+    const promise = createConversation(key, scene, targetId).finally(() => {
+      creating.delete(key)
+    })
+    creating.set(key, promise)
+    return promise
   }
 
   /** Run one turn and deliver its answer. */
   async function runTurn(entry, prompt, msgId) {
     const firstSeq = entry.agent.session.seq
-    let acked = false
     let ackTimer
+    let ackFired = false
+    let settleAck
+    const ackPromise = new Promise((resolve) => {
+      settleAck = resolve
+    })
     if (config.ackDelayMs > 0) {
       ackTimer = setTimeout(() => {
-        acked = true
-        replier.sendAck({ scene: entry.scene, targetId: entry.targetId, msgId }).catch((error) => logger.warn(error.message))
+        ackFired = true
+        replier
+          .sendAck({ scene: entry.scene, targetId: entry.targetId, msgId })
+          .then((sent) => settleAck(sent))
+          .catch(() => settleAck(false))
       }, config.ackDelayMs)
       ackTimer.unref?.()
+    } else {
+      settleAck(false)
     }
     let reason
     let text = ''
@@ -173,11 +272,16 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
       reason = { kind: 'error' }
     } finally {
       if (ackTimer !== undefined) clearTimeout(ackTimer)
+      if (!ackFired) settleAck(false)
     }
+    const ackSent = await ackPromise
     try {
       const outcome = summarize(entry.agent.session, firstSeq)
       text = outcome.text
       reason = outcome.reason ?? reason
+      if (reason?.kind === 'error') {
+        trace(`turn failed: ${reason.error?.code ?? '?'} ${reason.error?.message ?? '?'}`)
+      }
     } catch (error) {
       logger.error(error)
     }
@@ -192,8 +296,10 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
       targetId: entry.targetId,
       msgId,
       text: composed,
+      ackSent,
     })
-    logger.info(`turn ${reason?.kind ?? 'unknown'} for ${entry.key}: ${outcome}${acked ? ' (after placeholder)' : ''}`)
+    replier.forgetMsgId(msgId)
+    logger.info(`turn ${reason?.kind ?? 'unknown'} for ${entry.key}: ${outcome}${ackSent ? ' (after placeholder)' : ''}`)
   }
 
   /** Queue work behind whatever this conversation is already running. */
@@ -247,6 +353,7 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
 
     if (content === '/new') {
       conversations.delete(key)
+      sessionIndex.delete(key)
       replier
         .deliver({ scene, targetId, msgId, text: '已开启新会话。' })
         .catch((error) => logger.error(error))

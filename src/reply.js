@@ -99,9 +99,24 @@ function reasonText(reason) {
   }
 }
 
+/**
+ * Lines carrying model-side tool-call syntax. A Session without tools makes the
+ * model emit its native template (`<||DSML||invoke ...>`) as plain text; that
+ * must never reach a QQ user.
+ */
+const PROTOCOL_MARKUP = /DSML|<\/?(?:function_calls|invoke|parameter)\b/i
+
+/** Drop protocol markup lines; fall back when nothing readable is left. */
+function scrubProtocolMarkup(text) {
+  if (!PROTOCOL_MARKUP.test(text)) return text
+  const kept = text.split('\n').filter((line) => !PROTOCOL_MARKUP.test(line))
+  const cleaned = kept.join('\n').trim()
+  return cleaned === '' ? '（这一轮没有产出可展示的内容）' : cleaned
+}
+
 /** Compose the final text for one turn from the assistant text and turn end. */
 export function composeTurnText(text, reason) {
-  const body = text.trim()
+  const body = scrubProtocolMarkup(text.trim())
   if (reason?.kind === 'completed') return body === '' ? reasonText(reason) : body
   if (reason?.kind === 'max-tokens') return body === '' ? reasonText(reason) : `${body}\n\n${reasonText(reason)}`
   return body === '' ? reasonText(reason) : `${body}\n\n${reasonText(reason)}`
@@ -111,6 +126,26 @@ export function composeTurnText(text, reason) {
 export function createReplier({ api, logger, config, awaitReady }) {
   /** Sticky for the process: once the platform says "too long", never grow back. */
   let maxChars = config.maxChars
+  /**
+   * `msg_seq` is per `msg_id` and must strictly increase across every message we
+   * send for that inbound message — the placeholder and the answer share the
+   * counter, otherwise the answer is rejected as a duplicate of the placeholder.
+   * @type {Map<string, number>}
+   */
+  const seqByMsgId = new Map()
+
+  function nextSeq(msgId) {
+    if (msgId === undefined) return undefined
+    const next = seqByMsgId.get(msgId) ?? 1
+    seqByMsgId.set(msgId, next + 1)
+    return next
+  }
+
+  /** Drop the counter once a turn is finished, keeping the map bounded. */
+  function forgetMsgId(msgId) {
+    if (msgId !== undefined) seqByMsgId.delete(msgId)
+    if (seqByMsgId.size > 500) seqByMsgId.clear()
+  }
 
   async function sendOnce({ scene, targetId, text, markdown, msgId, msgSeq }) {
     return api.sendMessage({ scene, targetId, text, markdown, msgId, msgSeq })
@@ -118,18 +153,18 @@ export function createReplier({ api, logger, config, awaitReady }) {
 
   /**
    * Deliver one already-composed text.
+   * @param {{scene: string, targetId: string, msgId?: string, text: string, ackSent?: boolean}} request
    * @returns {Promise<'sent'|'partial'|'failed'>}
    */
-  async function deliver({ scene, targetId, msgId, text }) {
+  async function deliver({ scene, targetId, msgId, text, ackSent = false }) {
     const markdown = config.format === 'markdown'
     const normalized = markdown ? normalize(text) : { text, isCode: [] }
     let passiveAlive = true
-    let budget = PASSIVE_BUDGET[scene] ?? 4
-    let msgSeq = 1
+    let budget = (PASSIVE_BUDGET[scene] ?? 4) - (ackSent ? 1 : 0)
     let activeMarkdown = markdown
     let delivered = 0
 
-    const limit = Math.min(config.maxChunks, budget)
+    const limit = Math.max(1, Math.min(config.maxChunks, budget))
     const queue = splitText(normalized.text, maxChars, limit)
 
     while (queue.length > 0) {
@@ -148,20 +183,14 @@ export function createReplier({ api, logger, config, awaitReady }) {
             targetId,
             text: chunk,
             markdown: activeMarkdown,
-            ...(usePassive ? { msgId, msgSeq } : {}),
+            ...(usePassive ? { msgId, msgSeq: nextSeq(msgId) } : {}),
           })
-          if (usePassive) {
-            budget -= 1
-            msgSeq += 1
-          }
+          if (usePassive) budget -= 1
           delivered += 1
           break
         } catch (error) {
           const errCode = error.errCode
-          if (errCode === DUPLICATE && usePassive) {
-            msgSeq += 1
-            continue
-          }
+          if (errCode === DUPLICATE && usePassive) continue
           if (WINDOW_DEAD.has(errCode) && usePassive) {
             passiveAlive = false
             logger.warn(`passive window closed (err_code=${errCode}); switching this turn to active push`)
@@ -195,17 +224,17 @@ export function createReplier({ api, logger, config, awaitReady }) {
     return 'sent'
   }
 
-  /** Send the one placeholder allowed per turn. */
+  /** Send the one placeholder allowed per turn; reports whether it landed. */
   async function sendAck({ scene, targetId, msgId }) {
     if (config.ackDelayMs === 0) return false
-    const text = '收到，正在跑，可能要几分钟。'
+    const text = '收到，正在处理…'
     try {
       await sendOnce({
         scene,
         targetId,
         text,
         markdown: false,
-        ...(msgId === undefined ? {} : { msgId, msgSeq: 1 }),
+        ...(msgId === undefined ? {} : { msgId, msgSeq: nextSeq(msgId) }),
       })
       return true
     } catch (error) {
@@ -214,5 +243,5 @@ export function createReplier({ api, logger, config, awaitReady }) {
     }
   }
 
-  return { deliver, sendAck }
+  return { deliver, sendAck, forgetMsgId }
 }
