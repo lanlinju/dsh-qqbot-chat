@@ -1,7 +1,6 @@
 # WorkBuddy AI — regenerable or private
 # Skills are reinstalled from skills-lock.json; memory is machine-local.
-.workbuddy-ai/skills/
-.workbuddy-ai/memory/
+.workbuddy-ai/
 
 # Node
 node_modules/
