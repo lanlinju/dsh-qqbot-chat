@@ -21,7 +21,7 @@ export class ApiError extends Error {
 }
 
 /** Create the API client for one bot identity. */
-export function createApi({ apiBase, tokens, logger, logFrames }) {
+export function createApi({ apiBase, tokens, logger, logFrames, trace = () => {} }) {
   async function call(method, path, body, { retryAuth = true } = {}) {
     const token = await tokens.get()
     const started = Date.now()
@@ -47,6 +47,7 @@ export function createApi({ apiBase, tokens, logger, logFrames }) {
 
     if (logFrames) logger.debug(`${method} ${path} -> ${response.status} ${elapsed}ms ${text.slice(0, 800)}`)
     else logger.info(`${method} ${path} -> ${response.status} ${elapsed}ms`)
+    trace(`${method} ${path} -> ${response.status}${failed ? ` code=${errCode}` : ''}`)
 
     if (response.status === 401 && retryAuth) {
       logger.warn(`${method} ${path} rejected the access token; refreshing once`)

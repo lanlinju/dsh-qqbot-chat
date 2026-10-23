@@ -39,9 +39,9 @@ export async function apply(ctx, config) {
     logger,
   })
 
-  const api = createApi({ apiBase: config.apiBase, tokens, logger, logFrames: config.logFrames })
+  const api = createApi({ apiBase: config.apiBase, tokens, logger, logFrames: config.logFrames, trace })
   const replier = createReplier({ api, logger, config, awaitReady: (ms) => gateway.awaitReady(ms) })
-  const bridge = createBridge({ ctx, config, replier, logger })
+  const bridge = createBridge({ ctx, config, replier, logger, trace })
 
   const gateway = createGateway({
     api,

@@ -257,6 +257,7 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
 
   /** Close the socket and stop reconnecting; resolves once the socket is down. */
   async function stop() {
+    trace('dispose requested')
     stopping = true
     clearHeartbeat()
     clearTimeout(reconnectTimer)
@@ -278,6 +279,7 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
       }
     })
     logger.info('gateway closed')
+    trace('gateway closed')
   }
 
   return { start, stop, isReady, awaitReady }

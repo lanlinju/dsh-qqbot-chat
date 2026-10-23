@@ -9,6 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -82,7 +83,7 @@ function createSemaphore(limit) {
 }
 
 /** Create the bridge between gateway events and dsh sessions. */
-export function createBridge({ ctx, config, replier, logger }) {
+export function createBridge({ ctx, config, replier, logger, trace = () => {} }) {
   const conversations = new Map()
   const semaphore = createSemaphore(config.maxConcurrent)
   const workspacePath = expandHome(config.workspacePath)
@@ -92,8 +93,8 @@ export function createBridge({ ctx, config, replier, logger }) {
   async function ensureWorkspace() {
     if (workspace !== undefined) return workspace
     if (workspacePending === undefined) {
-      workspacePending = ctx.workspaceRegistry
-        .create(workspacePath)
+      workspacePending = mkdir(workspacePath, { recursive: true })
+        .then(() => ctx.workspaceRegistry.create(workspacePath))
         .then((created) => {
           workspace = created
           logger.info(`workspace ready at ${created.path}`)
@@ -114,16 +115,21 @@ export function createBridge({ ctx, config, replier, logger }) {
 
   /** Create the Session for one conversation and pin its permission tier. */
   async function createConversation(key, scene, targetId) {
+    trace(`creating session for ${key}`)
     const ws = await ensureWorkspace()
+    trace(`workspace ${ws.path}`)
     const sessionId = brandString(`qqbot-${randomUUID()}`)
     const selection = ctx.agentDefaultModel.currentSelection()
+    trace(`model selection ${selection.provider}/${selection.model}`)
     const { agent } = await ctx.agents.create({
       sessionId,
       meta: { cwd: ws.path },
       agentOptions: { provider: selection.provider, model: selection.model },
     })
+    trace(`agent created ${sessionId}`)
     setSandboxMode(agent.session, 'workspace-write')
     setApprovalPolicy(agent.session, 'never')
+    trace('sandbox + approval written')
     try {
       await ws.attachSession(sessionId)
     } catch (error) {
@@ -157,9 +163,12 @@ export function createBridge({ ctx, config, replier, logger }) {
     let reason
     let text = ''
     try {
+      trace(`turn start (firstSeq=${firstSeq})`)
       entry.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }))
       await entry.agent.whenIdle()
+      trace('whenIdle returned')
     } catch (error) {
+      trace(`turn error: ${error?.stack ?? error}`)
       logger.error(error)
       reason = { kind: 'error' }
     } finally {
@@ -191,7 +200,10 @@ export function createBridge({ ctx, config, replier, logger }) {
   function enqueue(entry, task) {
     entry.chain = entry.chain
       .then(() => semaphore.run(task))
-      .catch((error) => logger.error(error))
+      .catch((error) => {
+        trace(`queue error: ${error?.stack ?? error}`)
+        logger.error(error)
+      })
     return entry.chain
   }
 
@@ -202,6 +214,9 @@ export function createBridge({ ctx, config, replier, logger }) {
     const sender = data?.author?.member_openid ?? data?.author?.user_openid ?? 'unknown'
     const msgId = data?.id
     const content = typeof data?.content === 'string' ? data.content.trim() : ''
+    trace(
+      `raw ${type} target=${String(targetId)} msgId=${String(msgId)} type=${String(data?.message_type)} content=${JSON.stringify(content)}`,
+    )
     if (typeof targetId !== 'string' || targetId === '') {
       logger.warn(`dropped ${type} without a target id`)
       return
@@ -212,6 +227,11 @@ export function createBridge({ ctx, config, replier, logger }) {
     }
     if (content === '') {
       logger.debug(`ignored an empty ${type} from ${sender}`)
+      if (scene === 'group') {
+        replier
+          .deliver({ scene, targetId, msgId, text: '在的，@我之后直接说需求就行。' })
+          .catch((error) => logger.error(error))
+      }
       return
     }
     if (!isAllowed(scene, targetId)) {
@@ -223,6 +243,7 @@ export function createBridge({ ctx, config, replier, logger }) {
     }
     const key = scene === 'group' ? `group:${targetId}` : `c2c:${targetId}`
     const prompt = scene === 'group' ? `[成员 ${sender.slice(-6)}] ${content}` : content
+    trace(`message ${type} key=${key} msgId=${msgId} chars=${content.length}`)
 
     if (content === '/new') {
       conversations.delete(key)
@@ -235,7 +256,10 @@ export function createBridge({ ctx, config, replier, logger }) {
 
     getConversation(key, scene, targetId)
       .then((entry) => enqueue(entry, () => runTurn(entry, prompt, msgId)))
-      .catch((error) => logger.error(error))
+      .catch((error) => {
+        trace(`conversation error: ${error?.stack ?? error}`)
+        logger.error(error)
+      })
   }
 
   /** Entry point for every dispatch frame the gateway hands us. */
