@@ -14,11 +14,13 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 
 /** Refresh this long before the advertised expiry. */
 const REFRESH_AHEAD_MS = 60_000
+/** After a failed early refresh, wait this long before trying again. */
+const RETRY_AFTER_FAILURE_MS = 5_000
 
 /** Build the token provider for one bot identity. */
 export function createTokenProvider({ apiBase, appId, appSecretRef, credentials, logger }) {
   const ref = credentialRef(appSecretRef)
-  /** @type {{ token: string, expiresAt: number } | undefined} */
+  /** @type {{ token: string, expiresAt: number, refreshAt: number } | undefined} */
   let cached
   /** @type {Promise<string> | undefined} */
   let inflight
@@ -45,19 +47,42 @@ export function createTokenProvider({ apiBase, appId, appSecretRef, credentials,
     }
     const ttlMs = Number(body.expires_in) * 1000
     const lifetime = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : 7200_000
-    cached = { token: body.access_token, expiresAt: Date.now() + lifetime }
+    const expiresAt = Date.now() + lifetime
+    cached = { token: body.access_token, expiresAt, refreshAt: expiresAt - REFRESH_AHEAD_MS }
     logger.debug(`token refreshed, lifetime=${Math.round(lifetime / 1000)}s`)
     return cached.token
   }
 
-  /** Resolve a usable token, refreshing when close to expiry. */
-  async function get() {
-    if (cached !== undefined && cached.expiresAt - REFRESH_AHEAD_MS > Date.now()) return cached.token
+  /** Start (or join) one in-flight refresh. */
+  function startRefresh() {
     if (inflight !== undefined) return inflight
     inflight = request().finally(() => {
       inflight = undefined
     })
     return inflight
+  }
+
+  /**
+   * Resolve a usable token.
+   *
+   * Inside the refresh window a failed refresh falls back to the still-valid
+   * token instead of failing the caller — a hiccup on the token endpoint must
+   * not cost a message. Only a token that has genuinely expired makes `get`
+   * throw.
+   */
+  async function get() {
+    const now = Date.now()
+    if (cached !== undefined && cached.expiresAt > now) {
+      if (now < cached.refreshAt) return cached.token
+      try {
+        return await startRefresh()
+      } catch (error) {
+        logger.warn(`token refresh failed, keeping the current token: ${error.message}`)
+        cached.refreshAt = Date.now() + RETRY_AFTER_FAILURE_MS
+        return cached.token
+      }
+    }
+    return startRefresh()
   }
 
   /** Drop the cached token (e.g. after the gateway rejects it). */

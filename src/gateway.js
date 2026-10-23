@@ -39,6 +39,8 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
   let reconnectTimer
   let attempt = 0
   let ready = false
+  /** Last `session_start_limit` reading: remaining sessions today and when the window resets. */
+  let startLimit
   /** @type {Array<() => void>} */
   let readyWaiters = []
 
@@ -140,7 +142,12 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
       logger.warn(`dropped a non-JSON gateway frame: ${String(raw).slice(0, 200)}`)
       return
     }
-    if (typeof frame.s === 'number') seq = frame.s
+    if (typeof frame.s === 'number') {
+      if (frame.op === 0 && seq !== undefined && frame.s > seq + 1) {
+        logger.warn(`gateway sequence jumped ${seq} -> ${frame.s}; ${frame.s - seq - 1} event(s) were missed`)
+      }
+      seq = frame.s
+    }
     trace(`<- op=${frame.op}${frame.t === undefined ? '' : ` t=${frame.t}`}${frame.op === 9 ? ' (invalid session)' : ''}`)
     switch (frame.op) {
       case 0:
@@ -162,7 +169,11 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
         return
       case 10:
         startHeartbeat(frame.d?.heartbeat_interval)
-        identifyOrResume().catch((error) => logger.error(error))
+        identifyOrResume().catch((error) => {
+          logger.error(error)
+          trace('identify failed, closing the socket so the reconnect loop owns the retry')
+          socket?.close(4009, 'identify failed')
+        })
         return
       case 11:
         return
@@ -182,8 +193,22 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
       seq = undefined
     }
     attempt += 1
-    const delay = backoffMs(attempt)
+    let delay = backoffMs(attempt)
+    if (startLimit !== undefined) {
+      if (startLimit.remaining <= 0) {
+        delay = Math.max(delay, Math.min(startLimit.resetAfterMs, 3_600_000) + 1_000)
+        logger.error(
+          new Error(
+            `daily session-start quota exhausted; holding reconnect for ${Math.round(delay / 1000)}s until the window resets`,
+          ),
+        )
+      } else if (startLimit.remaining < 10) {
+        delay = Math.max(delay, 60_000)
+        logger.warn(`only ${startLimit.remaining} session starts left today; backing off ${Math.round(delay / 1000)}s`)
+      }
+    }
     logger.warn(`gateway closed; reconnecting in ${delay}ms (attempt ${attempt}, ${action})`)
+    trace(`reconnect in ${delay}ms (attempt ${attempt}, ${action})`)
     clearTimeout(reconnectTimer)
     reconnectTimer = setTimeout(connect, delay)
     reconnectTimer.unref?.()
@@ -198,6 +223,14 @@ export function createGateway({ api, tokens, intents, logger, logFrames, trace =
       const gateway = await api.getGateway()
       url = gateway.url
       trace(`gateway url ${url}`)
+      const limit = gateway.session_start_limit
+      if (limit !== undefined && typeof limit.remaining === 'number') {
+        startLimit = {
+          remaining: limit.remaining,
+          resetAfterMs: (Number(limit.reset_after) || 0) * 1000,
+        }
+        trace(`session_start_limit remaining=${startLimit.remaining} reset_after=${limit.reset_after ?? '?'}s`)
+      }
     } catch (error) {
       trace(`gateway url failed: ${error.message}`)
       logger.error(error)
