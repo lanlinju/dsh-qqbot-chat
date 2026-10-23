@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: accepted (群聊部分被 ADR-0004 取代)
 ---
 
 # QQ 通道的权限档位与群聊取舍
+
+> 群聊部分（「v1 不接群聊」）已被 `ADR-0004` 取代；私聊的档位结论继续有效。
 
 私聊会话在建完 agent 后**显式**写入 `workspace-write` 沙箱与 `never` 审批策略（不继承 profile 默认，也不挂 `ctx.permissionPresets`），不注册 `approval/request` 应答者；群 @ 不建会话，只回一句「私聊我」。
 

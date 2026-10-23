@@ -1,0 +1,19 @@
+# 复制到 ~/.dsh/profiles/web/cordis.patch.yml，按需改 appId。
+# 这条是 loader 的 insert 补丁；name 必须是包名，不能写绝对路径。
+- insert:
+    - id: qqbot-chat
+      name: '@lanlinju/dsh-qqbot-chat'
+      config:
+        appId: 'YOUR_APP_ID'
+        appSecretRef: QQ_BOT_APP_SECRET
+        intents: 33554432
+        workspacePath: '~/.dsh/qqbot-workspace'
+        maxConcurrent: 1
+        # ackDelayMs: 8000
+        # maxChars: 1500
+        # maxChunks: 4
+        # format: markdown
+        # replyStyle: none
+        # allowedUsers: []
+        # allowedGroups: []
+        # logFrames: false
