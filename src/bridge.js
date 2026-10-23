@@ -381,10 +381,35 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
       })
   }
 
+  /** Drop `<@openid>` tokens the platform leaves in full-message payloads. */
+  function stripMentionTokens(text) {
+    return text.replace(/<@[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  }
+
   /** Entry point for every dispatch frame the gateway hands us. */
   function onEvent(type, data) {
     if (type === 'C2C_MESSAGE_CREATE' || type === 'GROUP_AT_MESSAGE_CREATE') {
       handleMessage(type, data)
+      return
+    }
+    if (type === 'GROUP_MESSAGE_CREATE') {
+      // A bot with full-message access gets every group message here, and an
+      // @-mention arrives as this type too — `mentions[].is_you` is the only
+      // reliable "was I addressed" signal.
+      if (data?.author?.bot === true) {
+        trace('ignored a group message authored by a bot (loop guard)')
+        return
+      }
+      const mentions = Array.isArray(data?.mentions) ? data.mentions : []
+      const addressed = mentions.some((mention) => mention?.is_you === true) || config.groupReply === 'all'
+      if (!addressed) {
+        trace(`group message not addressed to the bot (${mentions.length} mention(s)); ignored`)
+        return
+      }
+      handleMessage('GROUP_AT_MESSAGE_CREATE', {
+        ...data,
+        content: typeof data?.content === 'string' ? stripMentionTokens(data.content) : data?.content,
+      })
       return
     }
     logger.debug(`ignored gateway event ${type}`)
