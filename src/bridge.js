@@ -186,6 +186,18 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
         )
         sessionIndex.delete(key)
       } else {
+        // A Session attached to the workspace is reopened by dsh at boot, so it
+        // can already be live under a write handle; adopt it instead of trying
+        // to resume (which refuses an actively owned Session).
+        const live = ctx.agents.get(brandString(remembered.sessionId))
+        if (live !== undefined) {
+          trace(`adopting already-live session ${remembered.sessionId} for ${key}`)
+          applySessionPolicy(live, targetId)
+          const entry = { key, scene, targetId, sessionId: remembered.sessionId, agent: live, chain: Promise.resolve() }
+          conversations.set(key, entry)
+          logger.info(`session ${remembered.sessionId} adopted (already live) for ${key}`)
+          return entry
+        }
         try {
           const { agent } = await ctx.agents.resume({
             resumeSessionId: brandString(remembered.sessionId),
