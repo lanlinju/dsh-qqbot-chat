@@ -14,6 +14,7 @@
         # maxChunks: 4
         # format: markdown
         # replyStyle: none
+        # groupReply: all        # all（默认，群里每句都回）| mention（只回 @）
         # allowedUsers: []
         # allowedGroups: []
         # logFrames: false

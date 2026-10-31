@@ -38,6 +38,7 @@ export async function apply(ctx, config) {
   const trace =
     process.env.DSH_QQBOT_DEBUG === '1' ? (message) => console.error(`[qqbot] ${message}`) : () => {}
   trace('apply called')
+  trace(`groupReply=${config.groupReply} ackDelayMs=${config.ackDelayMs} format=${config.format}`)
 
   const tokens = createTokenProvider({
     apiBase: config.apiBase,

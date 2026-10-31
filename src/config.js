@@ -30,10 +30,10 @@ const FIELDS = {
   format: { kind: 'enum', values: ['markdown', 'text'], default: 'markdown' },
   replyStyle: { kind: 'enum', values: ['none', 'at', 'quote'], default: 'none' },
   /**
-   * Which group messages start a turn. `mention` answers only an @-mention;
-   * `all` answers every human message in the group (one model call each).
+   * Which group messages start a turn. `all` answers every human message in the
+   * group (one model call each); `mention` answers only an @-mention.
    */
-  groupReply: { kind: 'enum', values: ['mention', 'all'], default: 'mention' },
+  groupReply: { kind: 'enum', values: ['mention', 'all'], default: 'all' },
 }
 
 /** Describe a value the way a config author would recognise it. */
