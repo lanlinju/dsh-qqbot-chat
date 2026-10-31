@@ -1,0 +1,17 @@
+# dsh profile bundle layer for @lanlinju/dsh-qqbot-chat.
+#
+# Installing this package as a profile bundle inserts the plugin row below.
+# Every field has a default, so a bare install works once the AppSecret is in
+# $DSH_HOME/.credentials.yaml and the AppID comes from `appId` or QQ_BOT_APP_ID.
+#
+# To override anything, add an id-targeted entry to your own profile patch
+# (`~/.dsh/profiles/<name>/cordis.patch.yml`) — that layer is applied after this
+# one, so it wins:
+#
+#   - id: qqbot-chat
+#     config:
+#       appId: '1903967151'
+#       groupReply: mention
+- insert:
+    - id: qqbot-chat
+      name: '@lanlinju/dsh-qqbot-chat'

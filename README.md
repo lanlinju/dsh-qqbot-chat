@@ -26,25 +26,37 @@ QQ 客户端 ──▶ QQ 网关（出站 WebSocket）
 - **回答原路返回**。优先用被动回复（挂原消息 `msg_id`），额度或时限用尽才降级为主动推送。
 - **不把内部语法发给用户**。模型跑偏吐出的工具调用标记会被剔除，不落到 QQ 里。
 
-## 特性
+## 安装
 
-| 能力 | 说明 |
-|---|---|
-| 私聊 / 群聊 | 群聊支持「只回 @」与「每句都回」两种模式，见 `groupReply` |
-| 会话复用 | 重启后接着上次聊，不新开 Session |
-| 长回答 | 按语义切分，超长截断并附说明；代码块不切在中间 |
-| 占位提示 | 一轮超过 `ackDelayMs` 先回一句「收到，正在处理…」，只发一次 |
-| 权限档位 | 会话固定 `workspace-write` + 审批 `never`，见 [ADR-0003](docs/adr/0003-qq-channel-permission-tier.md) |
-| 白名单 | `allowedUsers` / `allowedGroups`，空数组表示不限制 |
-| 断线自愈 | identify/resume、心跳、按关闭码分流重连，受 `session_start_limit` 配额约束 |
+装完**必须重启一次 dsh**——bundle 与配置只在启动时加载。
 
-## 快速开始
+### 一、在 DSH 里装（推荐）
 
-前置：dsh 已装好（`~/.dsh/profiles/web` 存在）、QQ 开放平台已建好机器人并拿到 `AppID` / `AppSecret`。
+打开 **设置 → 插件 → 安装**，填这一行：
 
-**1. 让宿主包可解析**
+```
+github:lanlinju/dsh-qqbot-chat
+```
 
-插件运行时 `import` 宿主包，但它们只装在 dsh 的 profile 里。用目录联接借过来（`node_modules/` 已 gitignore）：
+### 二、命令行
+
+```bash
+dsh plugin --profile web add github:lanlinju/dsh-qqbot-chat
+```
+
+`--profile` 照你平时那个写：网页端一般 `web`，桌面端 `desktop`。
+
+⚠ `github:` 这种写法会让包管理器去 clone 仓库，**机器上得有 git**。没装 git 会报 `ERR_PNPM_GIT_FETCH_FAILED`，改用 tarball 直链，不经过 git：
+
+```bash
+dsh plugin --profile web add https://codeload.github.com/lanlinju/dsh-qqbot-chat/tar.gz/refs/heads/main
+```
+
+（上面两种方式都需要能访问这个仓库；仓库目前是 private，得先登录 GitHub。）
+
+### 三、本地开发
+
+改代码要即时生效时用目录联接，不要复制。`node_modules/` 已 gitignore：
 
 ```powershell
 New-Item -ItemType Junction `
@@ -56,9 +68,45 @@ New-Item -ItemType Junction `
   -Target D:\Dev\ts\dsh-plugins\dsh-qqbot-chat
 ```
 
-**2. 存凭据**
+第一个联接是给**插件自己**用的：它运行时 `import` 宿主包，但那些包只装在 dsh 的 profile 里；Node 会把符号链接解析成真实路径，所以从仓库目录往上找找不到。
 
-`$DSH_HOME/.credentials.yaml`：
+### 装完还差两步（漏了就是「QQ 上毫无反应」）
+
+**1. 把包名登记成 bundle**
+
+`dsh plugin add` 只写 `dependencies`，**不会**自动加进 `dsh.profile.bundles`。实测只加依赖时插件不加载、日志里连 `apply` 都没有。编辑 `~/.dsh/profiles/web/package.json`：
+
+```json
+{
+  "dependencies": { "@lanlinju/dsh-qqbot-chat": "github:lanlinju/dsh-qqbot-chat" },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@lanlinju/dsh-qqbot-chat"
+      ]
+    }
+  }
+}
+```
+
+**2. 给 appId**
+
+bundle 层不带 appId（那是每台机器自己的东西）。二选一：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml —— 这一层在 bundle 之后应用，会覆盖
+- id: qqbot-chat
+  config:
+    appId: '1903967151'
+```
+
+或者启动前 `QQ_BOT_APP_ID=1903967151 dsh web`。
+
+### 凭据
+
+AppSecret 不进仓库、不进配置，只进 `$DSH_HOME/.credentials.yaml`：
 
 ```yaml
 version: 1
@@ -66,39 +114,39 @@ refs:
   QQ_BOT_APP_SECRET: <你的 AppSecret>
 ```
 
-配置里只写引用名 `QQ_BOT_APP_SECRET`，密钥本身不进仓库、不进 patch。
+配置里只写引用名（默认就是 `QQ_BOT_APP_SECRET`）。临时验证也可以直接 `QQ_BOT_APP_SECRET=xxx dsh web`——环境变量优先级高于文件。
 
-**3. 挂载**
+### QQ 开放平台侧
 
-`~/.dsh/profiles/web/cordis.patch.yml` 追加：
+| 项 | 要不要 | 说明 |
+|---|---|---|
+| AppID / AppSecret | **要** | 开发设置里拿，AppSecret 只显示一次 |
+| 群消息能力 | **要** | 群里要能收到消息，得在机器人能力里开；开了之后 @ 也走 `GROUP_MESSAGE_CREATE` |
+| **IP 白名单** | **要** | 调 OpenAPI 的**出口 IP** 要加进白名单，否则 HTTP 调用被平台拒绝（表现是发不出消息，但网关连着） |
+| 回调地址 / 事件订阅 URL | **不要** | 本插件走出站 WebSocket 长连接，不需要公网入口；那个框是给 webhook 模式的 |
 
-```yaml
-- insert:
-    - id: qqbot-chat
-      name: '@lanlinju/dsh-qqbot-chat'
-      config:
-        appId: 'YOUR_APP_ID'
-        appSecretRef: QQ_BOT_APP_SECRET
-```
+IP 白名单这一步最容易漏，因为**网关能连上、日志一片正常**，只是发消息被拒。报错会带 `401` 或权限相关的 `err_code`，`DSH_QQBOT_DEBUG=1` 下能直接看到。
 
-`name` 必须是**包名**，写绝对路径会被当成裸 specifier，Windows 上直接解析失败。
-
-**4. 启动**
+## 启动与验证
 
 ```bash
 dsh web --no-open
 ```
 
-看到 `gateway READY` 就成了。加 `DSH_QQBOT_DEBUG=1` 会往 stderr 打 `[qqbot]` 轨迹。
+看到 `gateway READY` 就成了。然后：
+
+1. **私聊**机器人发一句 → 几秒内回话；
+2. **群里**发一句（`groupReply` 默认 `all`，不用 @）；
+3. 发 `/new` → 回「已开启新会话。」。
 
 ## 配置
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `appId` | — | 必填，机器人 AppID |
-| `appSecretRef` | — | 必填，凭据引用名 |
+| `appId` | 环境变量 `QQ_BOT_APP_ID` | 机器人 AppID |
+| `appSecretRef` | `QQ_BOT_APP_SECRET` | 凭据引用名 |
 | `intents` | `33554432` | `1 << 25`，群 @ 与私聊共用 |
-| `workspacePath` | `~/.dsh/qqbot-workspace` | agent 的工作目录，目录不存在会自动创建 |
+| `workspacePath` | `~/.dsh/qqbot-workspace` | agent 的工作目录，不存在会自动创建 |
 | `maxConcurrent` | `1` | 跨会话并发的轮数上限 |
 | `groupReply` | `all` | `all` 群里每句都回；`mention` 只回 @ |
 | `allowedUsers` | `[]` | 私聊白名单（openid），空 = 不限制 |
@@ -121,12 +169,25 @@ dsh web --no-open
 | 发 `/new` | 丢掉当前会话，下次消息开新的 |
 | 它自己发的消息 | 一律忽略（`author.bot` 守卫，防自环） |
 
+## 排查
+
+先开 `DSH_QQBOT_DEBUG=1`，它会把 `apply`、网关地址、原始事件字段、每次 OpenAPI 调用、dispose 全打到 stderr。默认日志进 dsh 的 UI 而不是 stdout，没有这层轨迹等于黑盒。
+
+| 症状 | 先查什么 |
+|---|---|
+| QQ 上毫无反应，日志里没有 `[qqbot] apply called` | 包名没进 `dsh.profile.bundles`；或版本被判不兼容（`disabling profile plugin row`） |
+| 网关 `READY` 但发消息被拒 | 平台侧的 **IP 白名单** |
+| 群里 @ 不回，但日志有 `GROUP_MESSAGE_CREATE` | `groupReply` 与 `mentions[].is_you` 判定 |
+| 回答是一串 `<｜｜DSML｜｜invoke>` | agent 没挂 preset，没有工具 |
+| 报 `all tools cannot be deferred` | 接回了一个「无工具时代」的旧会话，删掉索引条目即可 |
+| 日志里 `40054005` 然后成功 | 占位与正文抢 `msg_seq`，新版本已修 |
+| 侧边栏堆出一串同名会话 | 旧版本每次 resume 失败都新建，清 `workspace.json` 里多余的 sessionIds |
+
 ## 已知限制
 
 - **群侧没有读隔离**。沙箱只挡写不挡读，群成员理论上能让 agent 读出机器上的文件并念回群里。见 [ADR-0004](docs/adr/0004-group-chat-enabled-permissions-deferred.md)。
 - **`groupReply: all` 按消息计费**。群里每句话一次模型调用，热闹时段还会因串行队列积压。见 [ADR-0005](docs/adr/0005-group-reply-every-message.md)。
 - **没接流式消息**。`stream_messages` 仅支持私聊且渲染语义未明，只在 `whenIdle()` 后一次性回。见 [#8](https://github.com/lanlinju/dsh-qqbot-chat/issues/8)。
-- **不持久化时区/系统信息**。agent 在沙箱里，`pwsh` 之类依赖 .NET 的工具可能起不来，它会自己改用别的工具。
 - 被动窗口过期、超长切分、主动降级三条分支有代码与单测，但**没有真机故障注入**。
 
 ## 开发
@@ -145,7 +206,7 @@ src/
 
 零第三方运行时依赖，只用 `node:` 内置与全局 `WebSocket` / `fetch`。
 
-**调试**：`DSH_QQBOT_DEBUG=1 dsh web` 会打印 apply、网关地址、原始事件字段、bridge 每一步、每次 OpenAPI 调用、dispose 路径。这个插件的日志默认进 dsh 的 UI 而不是 stdout，没有这层轨迹等于黑盒。
+`package.json` 里的 `dsh.bundle.patch` 指向根目录的 `cordis.patch.yml`——那一层负责把插件行 `insert` 进 profile，所以装完不需要手写 patch 才能出现。
 
 ## 决策记录
 

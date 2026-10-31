@@ -15,8 +15,10 @@ const DEFAULT_INTENTS = 1 << 25
 
 /** Field table: `required` plus a coercion/default pair. */
 const FIELDS = {
-  appId: { kind: 'string', required: true },
-  appSecretRef: { kind: 'string', required: true },
+  // Optional here on purpose: `apply` also accepts QQ_BOT_APP_ID from the
+  // environment, so a bundle install needs no config at all.
+  appId: { kind: 'string' },
+  appSecretRef: { kind: 'string', default: 'QQ_BOT_APP_SECRET' },
   intents: { kind: 'int', default: DEFAULT_INTENTS },
   workspacePath: { kind: 'string', default: '~/.dsh/qqbot-workspace' },
   maxConcurrent: { kind: 'int', default: 1, min: 1 },

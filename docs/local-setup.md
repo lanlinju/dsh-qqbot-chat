@@ -2,6 +2,8 @@
 
 把本插件挂进 `~/.dsh/profiles/web`，用真实凭据跑通一次往返。
 
+> 安装的推荐路径（`dsh plugin add` / 设置里装 / tarball 兜底）写在 README 的「安装」一节。本文是本机开发时的细节：目录联接怎么建、配置怎么叠、出问题看哪里。
+
 ## 1. 让宿主包可解析
 
 插件运行时 `import` 宿主包（`@deepseek-ai/dsh-llm` 等），但它们只装在 dsh 的 profile 里。仓库通过一个**目录联接**把它们借过来（`node_modules/` 已 gitignore，不入库）：

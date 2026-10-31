@@ -40,9 +40,16 @@ export async function apply(ctx, config) {
   trace('apply called')
   trace(`groupReply=${config.groupReply} ackDelayMs=${config.ackDelayMs} format=${config.format}`)
 
+  const appId = config.appId ?? process.env.QQ_BOT_APP_ID
+  if (typeof appId !== 'string' || appId.trim() === '') {
+    throw new Error(
+      'qqbot-chat needs the bot AppID: set `appId` in the plugin config, or export QQ_BOT_APP_ID before starting dsh',
+    )
+  }
+
   const tokens = createTokenProvider({
     apiBase: config.apiBase,
-    appId: config.appId,
+    appId,
     appSecretRef: config.appSecretRef,
     credentials: ctx.credentials,
     logger,
@@ -63,7 +70,7 @@ export async function apply(ctx, config) {
   })
 
   ctx.effect(() => {
-    logger.info(`qqbot-chat mounting: appId=${config.appId} intents=${config.intents} workspace=${config.workspacePath}`)
+    logger.info(`qqbot-chat mounting: appId=${appId} intents=${config.intents} workspace=${config.workspacePath}`)
     trace('effect running, starting gateway')
     gateway.start()
     return () => gateway.stop()
