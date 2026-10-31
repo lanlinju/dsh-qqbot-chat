@@ -19,6 +19,7 @@ import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { composeTurnText } from './reply.js'
+import { ingestImages } from './media.js'
 import { createSessionIndex } from './sessions.js'
 
 /** Where dsh keeps its home; the session index lives beside the sessions themselves. */
@@ -251,7 +252,7 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
   }
 
   /** Run one turn and deliver its answer. */
-  async function runTurn(entry, prompt, msgId) {
+  async function runTurn(entry, prompt, msgId, rawAttachments) {
     const firstSeq = entry.agent.session.seq
     let ackTimer
     let ackFired = false
@@ -274,8 +275,18 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
     let reason
     let text = ''
     try {
-      trace(`turn start (firstSeq=${firstSeq})`)
-      entry.agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }))
+      const { blocks, notes } = await ingestImages({
+        attachments: ctx.attachments,
+        raw: rawAttachments,
+        logger,
+        trace,
+      })
+      const text = [prompt, ...notes].filter((part) => part !== '').join('\n')
+      const content = []
+      if (text !== '') content.push({ type: 'text', text })
+      content.push(...blocks)
+      trace(`turn start (firstSeq=${firstSeq}) blocks=${content.length}`)
+      entry.agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
       await entry.agent.whenIdle()
       trace('whenIdle returned')
     } catch (error) {
@@ -343,7 +354,8 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
       logger.warn(`dropped ${type} without msg_id`)
       return
     }
-    if (content === '') {
+    const hasAttachments = Array.isArray(data?.attachments) && data.attachments.length > 0
+    if (content === '' && !hasAttachments) {
       logger.debug(`ignored an empty ${type} from ${sender}`)
       if (scene === 'group') {
         replier
@@ -374,7 +386,7 @@ export function createBridge({ ctx, config, replier, logger, trace = () => {} })
     }
 
     getConversation(key, scene, targetId)
-      .then((entry) => enqueue(entry, () => runTurn(entry, prompt, msgId)))
+      .then((entry) => enqueue(entry, () => runTurn(entry, prompt, msgId, data?.attachments)))
       .catch((error) => {
         trace(`conversation error: ${error?.stack ?? error}`)
         logger.error(error)

@@ -21,6 +21,7 @@ export const inject = [
   'sessions',
   'agentDefaultModel',
   'agentPresets',
+  'attachments',
   'workspaceRegistry',
   'sessionTitle',
   'credentials',

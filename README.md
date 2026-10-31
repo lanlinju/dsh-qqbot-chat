@@ -146,6 +146,7 @@ dsh web --no-open
 | 私聊 | 发什么都起一轮 |
 | 群里 @ 它 | 起一轮（`content` 里的 `<@openid>` 会被剥掉） |
 | 群里不 @ | `groupReply: all` 时起一轮；`mention` 时忽略 |
+| **发图片** | 下载后存成 dsh 附件，和文字一起进同一轮；格式/大小不合规会附一句说明 |
 | 发 `/new` | 丢掉当前会话，下次消息开新的 |
 | 它自己发的消息 | 一律忽略（`author.bot` 守卫，防自环） |
 
@@ -167,6 +168,8 @@ dsh web --no-open
 
 - **群侧没有读隔离**。沙箱只挡写不挡读，群成员理论上能让 agent 读出机器上的文件并念回群里。见 [ADR-0004](docs/adr/0004-group-chat-enabled-permissions-deferred.md)。
 - **`groupReply: all` 按消息计费**。群里每句话一次模型调用，热闹时段还会因串行队列积压。见 [ADR-0005](docs/adr/0005-group-reply-every-message.md)。
+- **图片按视觉输入处理**。能不能真"看见"取决于当前模型：纯文本模型下 dsh 会把它换成占位文本，agent 只知道"这里有一张图"。图片只支持 dsh 附件服务允许的格式（通常是 png / jpeg / webp），gif 会被跳过并告知。
+- **只收不传**。能读图，但回复仍是文本，不能把图片发回 QQ。
 - **没接流式消息**。`stream_messages` 仅支持私聊且渲染语义未明，只在 `whenIdle()` 后一次性回。见 [#8](https://github.com/lanlinju/dsh-qqbot-chat/issues/8)。
 - 被动窗口过期、超长切分、主动降级三条分支有代码与单测，但**没有真机故障注入**。
 
