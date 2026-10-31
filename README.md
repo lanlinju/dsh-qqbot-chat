@@ -28,7 +28,7 @@ QQ 客户端 ──▶ QQ 网关（出站 WebSocket）
 
 ## 安装
 
-前置：dsh 已装好；已在 **[q.qq.com](https://q.qq.com/)** 建好机器人并拿到 `AppID` / `AppSecret`（见下面「QQ 开放平台侧」）。
+前置：dsh 已装好；已在 **[QQ 开放平台](https://q.qq.com/)** 建好机器人并拿到 `AppID` / `AppSecret`（见下面「QQ 开放平台侧」）。
 
 装完**必须重启一次 dsh**——bundle 与配置只在启动时加载。
 
@@ -100,7 +100,7 @@ refs:
 
 ### QQ 开放平台侧
 
-以下都在 **[https://q.qq.com/](https://q.qq.com/)** 里配置：登录 → 机器人 → 开发设置 / 能力配置。
+以下都在 **[QQ 开放平台](https://q.qq.com/)** 里配置：登录 → 机器人 → 开发设置 / 能力配置。
 
 | 项 | 要不要 | 说明 |
 |---|---|---|
@@ -194,15 +194,3 @@ src/
 零第三方运行时依赖，只用 `node:` 内置与全局 `WebSocket` / `fetch`。
 
 `package.json` 里的 `dsh.bundle.patch` 指向根目录的 `cordis.patch.yml`——那一层负责把插件行 `insert` 进 profile，所以装完不需要手写 patch 才能出现。
-
-## 决策记录
-
-| ADR | 结论 |
-|---|---|
-| [0001](docs/adr/0001-standard-schema-config-validation.md) | 配置用手写 Standard Schema 校验，不引 schemastery |
-| [0002](docs/adr/0002-passive-first-error-driven-fallback.md) | 被动回复优先，按平台错误码降级，不按本地计时 |
-| [0003](docs/adr/0003-qq-channel-permission-tier.md) | 权限档位 `workspace-write` + `never`；群聊部分已被 0004 取代 |
-| [0004](docs/adr/0004-group-chat-enabled-permissions-deferred.md) | 群聊纳入 v1，读隔离风险已知未解 |
-| [0005](docs/adr/0005-group-reply-every-message.md) | 群里每句都回（`groupReply: all` 为默认） |
-
-更多：`GLOSSARY.md` 收概念域词汇，`docs/local-setup.md` 是本机装配细节，`docs/agents/` 是仓库协作约定。
