@@ -28,6 +28,8 @@ QQ 客户端 ──▶ QQ 网关（出站 WebSocket）
 
 ## 安装
 
+前置：dsh 已装好；已在 **[q.qq.com](https://q.qq.com/)** 建好机器人并拿到 `AppID` / `AppSecret`（见下面「QQ 开放平台侧」）。
+
 装完**必须重启一次 dsh**——bundle 与配置只在启动时加载。
 
 ### 一、在 DSH 里装（推荐）
@@ -97,6 +99,8 @@ refs:
 配置里只写引用名（默认就是 `QQ_BOT_APP_SECRET`）。临时验证也可以直接 `QQ_BOT_APP_SECRET=xxx dsh web`——环境变量优先级高于文件。
 
 ### QQ 开放平台侧
+
+以下都在 **[https://q.qq.com/](https://q.qq.com/)** 里配置：登录 → 机器人 → 开发设置 / 能力配置。
 
 | 项 | 要不要 | 说明 |
 |---|---|---|
